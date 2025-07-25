@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Guardrails AI Content Safety Scanner with Dashboard
-                by Isi.idemudia
+isi.idemudia
 This script uses Guardrails AI validators to scan content for various safety issues
 and generates an interactive dashboard with heatmaps and recommendations.
 
@@ -20,15 +20,33 @@ from collections import defaultdict, Counter
 
 try:
     import guardrails as gd
-    from guardrails.validators import (
-        ToxicLanguage,
-        SecretValidator,
-        PIIDetector,
-        BiasDetector,
-        RestrictToTopic,
-    )
-except ImportError:
-    print("Error: guardrails-ai not installed. Run: pip install guardrails-ai")
+    # Try different import patterns for validators
+    try:
+        from guardrails.validators import (
+            ToxicLanguage,
+            PIIDetector,
+        )
+        VALIDATORS_AVAILABLE = True
+    except ImportError:
+        try:
+            # Alternative import pattern
+            from guardrails_community.validators import (
+                ToxicLanguage,
+                PIIDetector,
+            )
+            VALIDATORS_AVAILABLE = True
+        except ImportError:
+            print("Warning: Some validators not available. Installing basic text analysis...")
+            VALIDATORS_AVAILABLE = False
+            
+    # For now, let's create mock validators for demonstration
+    if not VALIDATORS_AVAILABLE:
+        print("Using mock validators for demonstration. Install specific validator packages for full functionality.")
+        
+except ImportError as e:
+    print(f"Error: guardrails-ai not installed properly. Details: {e}")
+    print("Please run: pip install guardrails-ai")
+    print("If issues persist, try: pip install --upgrade guardrails-ai")
     exit(1)
 
 try:
@@ -91,50 +109,101 @@ class ContentSafetyScanner:
         validators = {}
         
         try:
-            # Toxicity validator
-            validators['toxicity'] = {
-                'validator': ToxicLanguage(
-                    threshold=self.config.get('toxicity_threshold', 0.8),
-                    validation_method='sentence'
-                ),
-                'severity': 'high'
-            }
+            if VALIDATORS_AVAILABLE:
+                # Try to initialize real validators
+                try:
+                    validators['toxicity'] = {
+                        'validator': ToxicLanguage(
+                            threshold=self.config.get('toxicity_threshold', 0.8)
+                        ),
+                        'severity': 'high'
+                    }
+                except Exception as e:
+                    logger.warning(f"ToxicLanguage validator not available: {e}")
+                
+                try:
+                    validators['pii'] = {
+                        'validator': PIIDetector(
+                            pii_entities=self.config.get('pii_entities', [
+                                'EMAIL_ADDRESS', 'PHONE_NUMBER', 'CREDIT_CARD', 
+                                'SSN', 'PERSON', 'LOCATION'
+                            ])
+                        ),
+                        'severity': 'critical'
+                    }
+                except Exception as e:
+                    logger.warning(f"PIIDetector validator not available: {e}")
             
-            # PII detector
-            validators['pii'] = {
-                'validator': PIIDetector(
-                    pii_entities=self.config.get('pii_entities', [
-                        'EMAIL_ADDRESS', 'PHONE_NUMBER', 'CREDIT_CARD', 
-                        'SSN', 'PERSON', 'LOCATION'
-                    ])
-                ),
-                'severity': 'critical'
-            }
-            
-            # Secret validator
-            validators['secrets'] = {
-                'validator': SecretValidator(
-                    secrets=self.config.get('secret_patterns', [
-                        'api_key', 'secret_key', 'password', 'token'
-                    ])
-                ),
-                'severity': 'critical'
-            }
-            
-            # Bias detector
-            validators['bias'] = {
-                'validator': BiasDetector(
-                    bias_types=self.config.get('bias_types', [
-                        'gender', 'race', 'religion', 'age'
-                    ])
-                ),
-                'severity': 'medium'
-            }
+            # Add basic pattern-based validators as fallback
+            validators.update(self._initialize_basic_validators())
             
         except Exception as e:
             logger.warning(f"Some validators could not be initialized: {e}")
+            # Fall back to basic validators
+            validators = self._initialize_basic_validators()
             
         return validators
+    
+    def _initialize_basic_validators(self) -> Dict[str, Any]:
+        """Initialize basic pattern-based validators as fallback"""
+        import re
+        
+        class BasicPatternValidator:
+            def __init__(self, patterns, name):
+                self.patterns = [re.compile(p, re.IGNORECASE) for p in patterns]
+                self.name = name
+            
+            def validate(self, text):
+                for pattern in self.patterns:
+                    if pattern.search(text):
+                        return MockResult(False, f"{self.name} pattern detected")
+                return MockResult(True, "No issues found")
+        
+        class MockResult:
+            def __init__(self, validation_passed, error_message=""):
+                self.validation_passed = validation_passed
+                self.error = error_message
+                self.error_spans = None
+        
+        # Create basic validators using regex patterns
+        basic_validators = {
+            'secrets': {
+                'validator': BasicPatternValidator([
+                    r'api[_-]?key\s*[:=]\s*["\']?[\w\-]{16,}["\']?',
+                    r'secret[_-]?key\s*[:=]\s*["\']?[\w\-]{16,}["\']?',
+                    r'password\s*[:=]\s*["\']?[\w\-]{8,}["\']?',
+                    r'token\s*[:=]\s*["\']?[\w\-]{16,}["\']?',
+                    r'sk-[\w]{32,}',  # OpenAI API key pattern
+                    r'ghp_[\w]{36}',  # GitHub token pattern
+                ], 'Secret'),
+                'severity': 'critical'
+            },
+            'pii': {
+                'validator': BasicPatternValidator([
+                    r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  # Email
+                    r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',  # Phone number
+                    r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b',  # Credit card
+                    r'\b\d{3}[-]?\d{2}[-]?\d{4}\b',  # SSN
+                ], 'PII'),
+                'severity': 'critical'
+            },
+            'toxicity': {
+                'validator': BasicPatternValidator([
+                    r'\b(hate|stupid|idiot|moron|dumb)\b',
+                    r'\b(kill|die|death)\s+(you|yourself|him|her)\b',
+                ], 'Toxicity'),
+                'severity': 'high'
+            },
+            'bias': {
+                'validator': BasicPatternValidator([
+                    r'\b(women|men)\s+(are|aren\'t|can\'t|should|shouldn\'t)\b',
+                    r'\b(all|most)\s+(blacks|whites|asians|latinos|muslims|christians|jews)\b',
+                ], 'Bias'),
+                'severity': 'medium'
+            }
+        }
+        
+        return basic_validators
     
     def scan_text(self, text: str, file_path: Optional[str] = None) -> List[ScanResult]:
         """Scan text content using all available validators"""
@@ -147,11 +216,14 @@ class ContentSafetyScanner:
                 validator = validator_config['validator']
                 severity = validator_config['severity']
                 
-                # Create a guard with the validator
-                guard = gd.Guard().use(validator)
-                
-                # Validate the text
-                result = guard.validate(text)
+                # Handle both real Guardrails validators and basic pattern validators
+                if hasattr(validator, 'validate'):
+                    # Basic pattern validator
+                    result = validator.validate(text)
+                else:
+                    # Real Guardrails validator
+                    guard = gd.Guard().use(validator)
+                    result = guard.validate(text)
                 
                 scan_result = ScanResult(
                     validator_name=validator_name,
@@ -182,13 +254,21 @@ class ContentSafetyScanner:
         return results
     
     def scan_file(self, file_path: str) -> List[ScanResult]:
-        """Scan a text file for vulnerabilities"""
+        """Scan a file for vulnerabilities (supports text, CSV, JSON, etc.)"""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            file_extension = os.path.splitext(file_path)[1].lower()
             
-            logger.info(f"Scanning file: {file_path}")
-            return self.scan_text(content, file_path)
+            if file_extension == '.csv':
+                return self.scan_csv_file(file_path)
+            elif file_extension == '.json':
+                return self.scan_json_file(file_path)
+            else:
+                # Regular text file scanning
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                logger.info(f"Scanning text file: {file_path}")
+                return self.scan_text(content, file_path)
             
         except Exception as e:
             logger.error(f"Error reading file {file_path}: {e}")
@@ -202,10 +282,124 @@ class ContentSafetyScanner:
             self.all_results.append(error_result)
             return [error_result]
     
+    def scan_csv_file(self, file_path: str) -> List[ScanResult]:
+        """Scan a CSV file for vulnerabilities"""
+        try:
+            import csv
+            results = []
+            
+            logger.info(f"Scanning CSV file: {file_path}")
+            
+            with open(file_path, 'r', encoding='utf-8', newline='') as csvfile:
+                # Try to detect delimiter
+                sample = csvfile.read(1024)
+                csvfile.seek(0)
+                sniffer = csv.Sniffer()
+                delimiter = sniffer.sniff(sample).delimiter
+                
+                reader = csv.reader(csvfile, delimiter=delimiter)
+                headers = next(reader, [])
+                
+                # Scan headers for sensitive information
+                header_text = " ".join(headers)
+                header_results = self.scan_text(header_text, file_path)
+                for result in header_results:
+                    result.line_number = 1  # Header row
+                results.extend(header_results)
+                
+                # Scan each row
+                for row_num, row in enumerate(reader, start=2):  # Start at 2 because headers are row 1
+                    row_text = " ".join(str(cell) for cell in row)
+                    row_results = self.scan_text(row_text, file_path)
+                    
+                    # Add row number to results
+                    for result in row_results:
+                        result.line_number = row_num
+                    
+                    results.extend(row_results)
+                    
+                    # Limit scanning for very large CSV files (performance optimization)
+                    if row_num > 1000:
+                        logger.warning(f"Large CSV file detected. Scanned first 1000 rows only.")
+                        break
+            
+            logger.info(f"CSV scan completed: {len(results)} validation checks")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error scanning CSV file {file_path}: {e}")
+            error_result = ScanResult(
+                validator_name="csv_scan",
+                passed=False,
+                file_path=file_path,
+                error_message=f"Could not scan CSV file: {str(e)}",
+                severity='low'
+            )
+            self.all_results.append(error_result)
+            return [error_result]
+    
+    def scan_json_file(self, file_path: str) -> List[ScanResult]:
+        """Scan a JSON file for vulnerabilities"""
+        try:
+            import json
+            
+            logger.info(f"Scanning JSON file: {file_path}")
+            
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Convert JSON to text for scanning
+            json_text = json.dumps(data, indent=2)
+            results = self.scan_text(json_text, file_path)
+            
+            # Also scan individual values for more granular detection
+            def scan_json_values(obj, path="root"):
+                value_results = []
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        current_path = f"{path}.{key}"
+                        if isinstance(value, str):
+                            val_results = self.scan_text(value, file_path)
+                            for result in val_results:
+                                result.details = {"json_path": current_path}
+                            value_results.extend(val_results)
+                        elif isinstance(value, (dict, list)):
+                            value_results.extend(scan_json_values(value, current_path))
+                elif isinstance(obj, list):
+                    for i, item in enumerate(obj):
+                        current_path = f"{path}[{i}]"
+                        if isinstance(item, str):
+                            val_results = self.scan_text(item, file_path)
+                            for result in val_results:
+                                result.details = {"json_path": current_path}
+                            value_results.extend(val_results)
+                        elif isinstance(item, (dict, list)):
+                            value_results.extend(scan_json_values(item, current_path))
+                return value_results
+            
+            # Scan individual values
+            value_results = scan_json_values(data)
+            results.extend(value_results)
+            
+            logger.info(f"JSON scan completed: {len(results)} validation checks")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error scanning JSON file {file_path}: {e}")
+            error_result = ScanResult(
+                validator_name="json_scan",
+                passed=False,
+                file_path=file_path,
+                error_message=f"Could not scan JSON file: {str(e)}",
+                severity='low'
+            )
+            self.all_results.append(error_result)
+            return [error_result]
+    
     def scan_directory(self, directory_path: str, file_extensions: List[str] = None) -> Dict[str, List[ScanResult]]:
-        """Scan all text files in a directory"""
+        """Scan all files in a directory"""
         if file_extensions is None:
-            file_extensions = ['.txt', '.md', '.py', '.js', '.json', '.yaml', '.yml']
+            file_extensions = ['.txt', '.md', '.py', '.js', '.json', '.yaml', '.yml', '.csv', '.xml', '.html', '.sql']
         
         results = {}
         
@@ -467,15 +661,14 @@ class DashboardGenerator:
         
         for rec in recommendations:
             color = level_colors.get(rec['level'], '#6c757d')
-            html += f"""
-            <div class="recommendation {rec['level']}">
+                            html += f"""
                 <div class="rec-header">
                     <span class="rec-level" style="background-color: {color}">{rec['level'].upper()}</span>
                     <h4>{rec['title']}</h4>
                 </div>
                 <p>{rec['description']}</p>
                 <ul class="actions">
-            """
+                """
             for action in rec['actions']:
                 html += f"<li>{action}</li>"
             html += "</ul></div>"
@@ -610,7 +803,7 @@ def main():
     parser.add_argument('--output', choices=['text', 'json', 'dashboard'], default='dashboard',
                        help='Output format')
     parser.add_argument('--config', help='Path to JSON configuration file')
-    parser.add_argument('--extensions', nargs='+', default=['.txt', '.md', '.py', '.js'],
+    parser.add_argument('--extensions', nargs='+', default=['.txt', '.md', '.py', '.js', '.csv', '.json'],
                        help='File extensions to scan when scanning directories')
     parser.add_argument('--dashboard-file', default='security_dashboard.html',
                        help='Output file for dashboard')
