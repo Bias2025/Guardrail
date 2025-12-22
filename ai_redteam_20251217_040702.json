@@ -1,0 +1,22 @@
+{
+  "test_summary": {
+    "total_tests": 198,
+    "vulnerabilities_found": 144,
+    "endpoints_tested": 11,
+    "test_timestamp": "2025-12-17T04:07:02.594868",
+    "vulnerability_rate": "72.7%"
+  },
+  "ai_vulnerability_summary": {
+    "total_vulnerabilities": 144,
+    "by_attack_type": {
+      "prompt_injection": 48,
+      "jailbreak": 32,
+      "data_leakage": 48,
+      "encoding_bypass": 16
+    },
+    "by_risk_level": {
+      "CRITICAL": 6,
+      "HIGH": 18,
+      "MEDIUM": 120,
+      "LOW": 0
+    },
